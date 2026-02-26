@@ -1,60 +1,92 @@
-﻿cbuffer PerObject : register(b0)
+// Shaders.hlsl
+
+cbuffer PerObjectCB : register(b0)
 {
-    float4x4 gWorldViewProj;
     float4x4 gWorld;
+    float4x4 gWorldViewProj;
+
     float3 gLightPosW;
-    float _pad0;
+    float  pad0;
+
     float3 gEyePosW;
-    float _pad1;
+    float  pad1;
+
     float4 gDiffuseColor;
-    float4 gSpecColorPower; // rgb spec, a power
+    float4 gSpecColorPower;
+
+    float  gUVOffsetX;
+    float  gUVOffsetY;
+    float  gUVTileX;
+    float  gUVTileY;
+
+    int    gUseTexture;
+    float3 pad2;
 };
 
-struct VSInput
+Texture2D    gDiffuseMap : register(t0);
+SamplerState gSampler    : register(s0);
+
+struct VertexIn
 {
-    float3 PosL : POSITION;
+    float3 PosL    : POSITION;
     float3 NormalL : NORMAL;
-    float4 Color : COLOR;
+    float2 TexC    : TEXCOORD;
+    float4 Color   : COLOR;
 };
 
-struct PSInput
+struct VertexOut
 {
-    float4 PosH : SV_POSITION;
-    float3 PosW : POSITION;
+    float4 PosH    : SV_POSITION;
+    float3 PosW    : POSITION;
     float3 NormalW : NORMAL;
-    float4 Color : COLOR;
+    float2 TexC    : TEXCOORD;
+    float4 Color   : COLOR;
 };
 
-PSInput VSMain(VSInput vin)
+VertexOut VSMain(VertexIn vin)
 {
-    PSInput vout;
+    VertexOut vout;
 
-    float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
-    vout.PosW = posW.xyz;
+    vout.PosH   = mul(float4(vin.PosL, 1.0f), gWorldViewProj);
+    vout.PosW   = mul(float4(vin.PosL, 1.0f), gWorld).xyz;
+    vout.NormalW = normalize(mul(vin.NormalL, (float3x3)gWorld));
 
-    float3 nW = mul(vin.NormalL, (float3x3) gWorld);
-    vout.NormalW = normalize(nW);
+    float2 uv;
+    uv.x = vin.TexC.x * gUVTileX + gUVOffsetX;
+    uv.y = vin.TexC.y * gUVTileY + gUVOffsetY;
+    vout.TexC = uv;
 
-    vout.PosH = mul(float4(vin.PosL, 1.0f), gWorldViewProj);
+    vout.Color = vin.Color;
 
-    vout.Color = vin.Color; // ? пробросили цвет
     return vout;
 }
 
-float4 PSMain(PSInput pin) : SV_Target
+float4 PSMain(VertexOut pin) : SV_TARGET
 {
-    float3 N = normalize(pin.NormalW);
-    float3 L = normalize(gLightPosW - pin.PosW);
-    float3 V = normalize(gEyePosW - pin.PosW);
-    float3 R = reflect(-L, N);
+    float3 normal   = normalize(pin.NormalW);
+    float3 lightDir = normalize(gLightPosW - pin.PosW);
+    float3 viewDir  = normalize(gEyePosW   - pin.PosW);
+    float3 halfVec  = normalize(lightDir + viewDir);
 
-    float NdotL = saturate(dot(N, L));
-    float3 diffuse = (pin.Color.rgb) * NdotL; // ? цвет грани
-    float3 ambient = 0.10f * pin.Color.rgb;
+    float4 baseColor;
+    if (gUseTexture)
+    {
+        baseColor = gDiffuseMap.Sample(gSampler, pin.TexC);
+    }
+    else
+    {
+        baseColor = pin.Color * gDiffuseColor;
+    }
 
-    float specPow = gSpecColorPower.a;
-    float specTerm = pow(saturate(dot(R, V)), specPow);
-    float3 specular = gSpecColorPower.rgb * specTerm;
+    float  diff    = max(dot(normal, lightDir), 0.0f);
+    float3 diffuse = diff * baseColor.rgb;
 
-    return float4(ambient + diffuse + specular, 1.0f);
+    float  spec    = pow(max(dot(normal, halfVec), 0.0f), gSpecColorPower.w);
+    float3 specular = spec * gSpecColorPower.xyz;
+
+    float3 ambient = 0.15f * baseColor.rgb;
+
+    float3 finalColor = ambient + diffuse + specular;
+
+    return float4(finalColor, baseColor.a);
 }
